@@ -1,97 +1,128 @@
+import 'dart:io';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'dart:io';
+import 'package:http/http.dart' as http;
 
 void main() {
-  runApp(MyApp());
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Take and Upload Photo',
-      home: MyHomePage(),
+    return const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: UploadFromCameraPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
+class UploadFromCameraPage extends StatefulWidget {
+  const UploadFromCameraPage({super.key});
+
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  State<UploadFromCameraPage> createState() => _UploadFromCameraPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  final picker = ImagePicker();
+class _UploadFromCameraPageState extends State<UploadFromCameraPage> {
+  final ImagePicker _picker = ImagePicker();
   File? _image;
+  String _status = '';
+  bool _loading = false;
+
+  // PAKAI URL NGROK DARI COLAB + '/upload'
+  final String _colabEndpoint =
+      'https://tena-unrepulsed-unintently.ngrok-free.dev/upload';
 
   Future<void> _takePhoto() async {
-    // Gantilah PickedFile ke XFile
-    final XFile? pickedFile = await picker.pickImage(source: ImageSource.camera);
-    if (pickedFile != null) {
+    final XFile? pickedFile =
+        await _picker.pickImage(source: ImageSource.camera, imageQuality: 80);
+
+    if (pickedFile == null) return;
+
+    setState(() {
+      _image = File(pickedFile.path);
+      _status = 'Mengirim foto ke Colab...';
+    });
+
+    await _sendToColab(pickedFile);
+  }
+
+  Future<void> _sendToColab(XFile pickedFile) async {
+    setState(() {
+      _loading = true;
+    });
+
+    try {
+      final uri = Uri.parse(_colabEndpoint);
+      final request = http.MultipartRequest('POST', uri);
+
+      // HARUS sama dengan request.files['image'] di Flask
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'image',
+          pickedFile.path,
+        ),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final body = json.decode(response.body);
+
+        setState(() {
+          _status =
+              'Upload sukses:\n${body['message']}\nNama file: ${body['filename']}';
+        });
+      } else {
+        setState(() {
+          _status =
+              'Gagal upload (status: ${response.statusCode})\nBody: ${response.body}';
+        });
+      }
+    } catch (e) {
       setState(() {
-        _image = File(pickedFile.path);
+        _status = 'Error kirim ke Colab: $e';
       });
-
-      // Simpan foto di perangkat lokal
-      await _saveToLocalDirectory(pickedFile);
+    } finally {
+      setState(() {
+        _loading = false;
+      });
     }
-  }
-
-  Future<void> _saveToLocalDirectory(XFile pickedFile) async {
-    // Mendapatkan direktori untuk menyimpan file di perangkat
-    final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/photo.jpg';
-    final imageFile = File(path);
-
-    // Salin foto ke direktori lokal
-    await imageFile.writeAsBytes(await pickedFile.readAsBytes());
-    print('Foto disimpan di: $path');
-
-    // Setelah foto tersimpan, kita bisa memberikan link ke pengguna untuk upload ke Google Drive
-    _showUploadInstructions(path);
-  }
-
-  void _showUploadInstructions(String filePath) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Upload ke Google Drive'),
-          content: Text('Foto telah disimpan di perangkat Anda di: $filePath\n\n'
-              'Sekarang, buka Google Drive, pilih folder yang diinginkan, dan upload file ini secara manual. '
-              'Setelah itu, Anda bisa mendapatkan link berbagi untuk digunakan di Google Colab.'),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: Text('Tutup'),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Take and Upload Photo'),
+        title: const Text('Flutter → Colab (Upload Foto)'),
       ),
-      body: Center(
+      body: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            _image == null
-                ? Text('No image selected.')
-                : Image.file(_image!),
-            SizedBox(height: 20),
+          children: [
+            Expanded(
+              child: Center(
+                child: _image == null
+                    ? const Text('Belum ada foto')
+                    : Image.file(_image!),
+              ),
+            ),
+            if (_loading) const CircularProgressIndicator(),
+            const SizedBox(height: 12),
             ElevatedButton(
-              onPressed: _takePhoto,
-              child: Text('Take Photo'),
+              onPressed: _loading ? null : _takePhoto,
+              child: const Text('Ambil Foto & Kirim ke Colab'),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _status,
+              textAlign: TextAlign.center,
             ),
           ],
         ),
